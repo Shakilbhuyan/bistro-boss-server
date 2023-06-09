@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const stripe = require('stripe')(process.env.PAYMENT_SECRET_KEY)
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config()
 const app = express();
@@ -14,17 +15,17 @@ app.use(express.json())
 const verifyJWT = (req, res, next) => {
   const authorization = req.headers.authorization;
   if (!authorization) {
-    return res.status(401).send({ error: true, message: 'Unauthorized access' })
+    return res.status(401).send({ error: true, message: 'unauthorized access' });
   }
   // bearer token
   const token = authorization.split(' ')[1];
 
   jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
     if (err) {
-      return res.status(401).send({ error: true, message: 'Unauthorized access' })
+      return res.status(401).send({ error: true, message: 'unauthorized access' })
     }
     req.decoded = decoded;
-    next()
+    next();
   })
 }
 
@@ -49,11 +50,12 @@ async function run() {
     const reviewCollections = client.db('bistroDb').collection('reviews');
     const cartCollections = client.db('bistroDb').collection('carts');
     const usersCollections = client.db('bistroDb').collection('users');
-
+    const paymentCollections = client.db('bistroDb').collection('payments');
 
     app.post('/jwt', (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' })
+
       res.send({ token })
     })
 
@@ -90,7 +92,7 @@ async function run() {
       const email = req.params.email;
 
       if (req.decoded.email !== email) {
-       return res.send({ admin: false })
+        return res.send({ admin: false })
       }
 
       const query = { email: email };
@@ -118,15 +120,15 @@ async function run() {
       res.send(result)
     });
 
-    app.post('/menu',verifyJWT, verifyAdmin, async(req, res) =>{
+    app.post('/menu', verifyJWT, verifyAdmin, async (req, res) => {
       const newItem = req.body;
       const result = await menuCollections.insertOne(newItem);
       res.send(result)
     });
 
-    app.delete('/menu/:id',verifyJWT, verifyAdmin, async(req, res)=>{
+    app.delete('/menu/:id', verifyJWT, verifyAdmin, async (req, res) => {
       const id = req.params.id;
-      const query = {_id : new ObjectId(id)};
+      const query = { _id: new ObjectId(id) };
       const result = await menuCollections.deleteOne(query);
       res.send(result)
     })
@@ -167,8 +169,33 @@ async function run() {
       const query = { _id: new ObjectId(id) }
       const result = await cartCollections.deleteOne(query);
       res.send(result)
-    })
+    });
 
+
+    // create payment intent
+    app.post('/create-payment-intent', verifyJWT, async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: 'usd',
+        payment_method_types: ['card']
+      });
+
+      res.send({
+        clientSecret: paymentIntent.client_secret
+      })
+    });
+    // payments Related api
+    app.post('/payments', verifyJWT, async (req, res) => {
+      const payment = req.body;
+      const insertResult = await paymentCollections.insertOne(payment);
+
+      const query = { _id: { $in: payment.cartItems.map(id => new ObjectId(id)) } }
+      const deleteResult = await cartCollections.deleteMany(query)
+
+      res.send({ insertResult, deleteResult });
+    })
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
@@ -178,7 +205,6 @@ async function run() {
   }
 }
 run();
-
 
 app.get('/', (req, res) => {
   res.send('Restaurent is Open')
