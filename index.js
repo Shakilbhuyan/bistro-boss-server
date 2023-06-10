@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
-const stripe = require('stripe')(process.env.PAYMENT_SECRET_KEY)
+const stripe = require('stripe')('sk_test_51NGxRvFLPuXl3J7VhkYZScCJIw8OfBEMcWh43aFgNE2Rsg9xbQBy7eeF1boJbhl4w4iXzmwG5IsM4ITL8EiY3V6s00sTiOLi3D')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config()
 const app = express();
@@ -190,12 +190,26 @@ async function run() {
     app.post('/payments', verifyJWT, async (req, res) => {
       const payment = req.body;
       const insertResult = await paymentCollections.insertOne(payment);
-
       const query = { _id: { $in: payment.cartItems.map(id => new ObjectId(id)) } }
       const deleteResult = await cartCollections.deleteMany(query)
-
       res.send({ insertResult, deleteResult });
+    });
+    app.get('/admin-stats',verifyJWT, verifyAdmin, async (req, res) => {
+      const users = await usersCollections.estimatedDocumentCount();
+      const products = await menuCollections.estimatedDocumentCount();
+      const orders = await paymentCollections.estimatedDocumentCount();
+
+      const payments = await paymentCollections.find().toArray();
+      const revenue = payments.reduce((sum, item) => sum + item.price ,0)
+      res.send({
+        users,
+        products,
+        orders,
+        revenue
+      })
     })
+
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
